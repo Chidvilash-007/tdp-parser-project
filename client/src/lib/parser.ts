@@ -234,6 +234,66 @@ export function analyzeGrammar(grammar: Grammar): GrammarAnalysis {
   return { nullable: [...nullable], leftRecursion, leftFactoring, epsilonAlternatives };
 }
 
+/**
+ * Convert indirect and direct left recursion to an equivalent right-recursive
+ * form. The original grammar is never mutated; the UI can still report the
+ * original cycle while the parsers operate on this safe grammar.
+ */
+export function eliminateLeftRecursion(grammar: Grammar): Grammar {
+  const order = [...grammar.nonTerminals];
+  const alternatives: Record<string, string[][]> = Object.fromEntries(
+    order.map((name) => [name, grammar.productions.filter((p) => p.lhs === name).map((p) => [...p.rhs])]),
+  );
+  const generated: string[] = [];
+  const freshName = (base: string) => {
+    let candidate = `${base}'`;
+    while (order.includes(candidate) || generated.includes(candidate)) candidate += "'";
+    generated.push(candidate);
+    return candidate;
+  };
+
+  for (let i = 0; i < order.length; i += 1) {
+    const current = order[i];
+    for (let j = 0; j < i; j += 1) {
+      const previous = order[j];
+      const expanded: string[][] = [];
+      for (const rhs of alternatives[current] ?? []) {
+        if (rhs[0] === previous) {
+          const suffix = rhs.slice(1);
+          for (const replacement of alternatives[previous] ?? []) expanded.push([...replacement, ...suffix]);
+        } else expanded.push(rhs);
+      }
+      alternatives[current] = expanded;
+    }
+
+    const recursive = (alternatives[current] ?? []).filter((rhs) => rhs[0] === current);
+    if (!recursive.length) continue;
+    const nonRecursive = (alternatives[current] ?? []).filter((rhs) => rhs[0] !== current);
+    if (!nonRecursive.length) continue;
+    const helper = freshName(current);
+    alternatives[current] = nonRecursive.map((beta) => [...beta, helper]);
+    alternatives[helper] = [
+      ...recursive.map((alpha) => [...alpha.slice(1), helper]),
+      [],
+    ];
+    order.push(helper);
+  }
+
+  const productions: Production[] = [];
+  let productionIndex = 0;
+  order.forEach((lhs) => {
+    (alternatives[lhs] ?? []).forEach((rhs) => {
+      productions.push({ id: `P${++productionIndex}`, lhs, rhs, raw: `${lhs} → ${formatSequence(rhs)}` });
+    });
+  });
+  const nonTerminals = order;
+  const terminalSet = new Set<string>();
+  productions.forEach((production) => production.rhs.forEach((symbol) => {
+    if (!nonTerminals.includes(symbol)) terminalSet.add(symbol);
+  }));
+  return { start: grammar.start, nonTerminals, terminals: [...terminalSet], productions };
+}
+
 export function computeFirst(grammar: Grammar) {
   const sets: Record<string, Set<string>> = {};
   grammar.nonTerminals.forEach((symbol) => (sets[symbol] = new Set<string>()));
@@ -395,6 +455,9 @@ export function parseLL1(grammar: Grammar, table: Record<string, Production[]>, 
 }
 
 export function parseRdp(grammar: Grammar, inputText: string) {
+  const originalAnalysis = analyzeGrammar(grammar);
+  const safeGrammar = eliminateLeftRecursion(grammar);
+  if (originalAnalysis.leftRecursion.length) grammar = safeGrammar;
   const input = tokenizeInput(inputText);
   const events: RdpEvent[] = [];
   const stack: string[] = [];
@@ -408,11 +471,9 @@ export function parseRdp(grammar: Grammar, inputText: string) {
     events.push({ index: events.length + 1, kind, message, stack: [...stack], input: [...input], inputIndex, production, tree: cloneTree() });
   };
 
-  const grammarAnalysis = analyzeGrammar(grammar);
-  if (grammarAnalysis.leftRecursion.length) {
-    const cycle = grammarAnalysis.leftRecursion[0].symbols.join(" → ");
-    emit("reject", `LEFT RECURSION detected: ${cycle}. Rewrite it before using recursive descent, for example A → A α | β becomes A → β A' and A' → α A' | epsilon.`);
-    return { events, result: "REJECT" as const, reason: `Left recursion detected (${cycle}). Rewrite the grammar using a new helper non-terminal before parsing.` };
+  if (originalAnalysis.leftRecursion.length) {
+    const cycle = originalAnalysis.leftRecursion[0].symbols.join(" → ");
+    emit("enter", `LEFT RECURSION detected: ${cycle}. Automatically rewritten with a helper non-terminal before parsing.`);
   }
 
   const parseNonTerminal = (name: string, parent: RdpNode | null, depth: number): boolean => {

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, CircleDot, GitBranch, Info, Layers3, Play, RotateCcw, Table2, Terminal, TreePine, Zap } from "lucide-react";
 import { Link } from "wouter";
 import AppShell from "@/components/AppShell";
-import { analyzeGrammar, buildParseTable, computeFirst, computeFollow, formatSequence, parseGrammar, parseLL1, parseRdp, setToArray, type Grammar, type RdpNode } from "@/lib/parser";
+import { analyzeGrammar, buildParseTable, computeFirst, computeFollow, eliminateLeftRecursion, formatSequence, parseGrammar, parseLL1, parseRdp, setToArray, type Grammar, type RdpNode } from "@/lib/parser";
 
 const LL1_SAMPLE = `E  -> T E'\nE' -> + T E' | ε\nT  -> id`;
 const RDP_SAMPLE = `S -> a A | a B\nA -> b\nB -> c`;
@@ -23,13 +23,14 @@ export default function TopDown() {
   const grammar = parsed.grammar;
   const analysis = useMemo(() => {
     if (!grammar) return null;
-    const first = computeFirst(grammar);
-    const follow = computeFollow(grammar, first.sets);
-    const table = buildParseTable(grammar, first.sets, follow.sets);
     const diagnostics = analyzeGrammar(grammar);
-    const rdp = parseRdp(grammar, inputText);
-    const ll1 = parseLL1(grammar, table.table, inputText);
-    return { first, follow, table, diagnostics, rdp, ll1 };
+    const safeGrammar = eliminateLeftRecursion(grammar);
+    const first = computeFirst(safeGrammar);
+    const follow = computeFollow(safeGrammar, first.sets);
+    const table = buildParseTable(safeGrammar, first.sets, follow.sets);
+    const rdp = parseRdp(safeGrammar, inputText);
+    const ll1 = parseLL1(safeGrammar, table.table, inputText);
+    return { first, follow, table, diagnostics, rdp, ll1, grammar: safeGrammar };
   }, [grammar, inputText]);
 
   const changeGrammar = (value: string) => { setGrammarText(value); setRdpStep(-1); setFirstStep(-1); setFollowStep(-1); setTableStep(-1); setLl1Step(0); setError(""); };
@@ -74,7 +75,7 @@ export default function TopDown() {
         </aside>
 
         <div className="min-w-0 space-y-5">
-          {!grammar || !analysis ? <div className="panel grid min-h-[600px] place-items-center p-10 text-center"><div><AlertTriangle className="mx-auto text-amber-300" size={28} /><h2 className="mt-4 font-display text-xl font-semibold">Grammar needs a small repair</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{parsed.error || "Enter a grammar to begin."}</p></div></div> : <><GrammarDiagnostics analysis={analysis} module={module} /><div className="mt-5">{module === "rdp" ? <RdpWorkspace analysis={analysis} step={rdpStep} setStep={setRdpStep} /> : <Ll1Workspace analysis={analysis} firstStep={firstStep} setFirstStep={setFirstStep} followStep={followStep} setFollowStep={setFollowStep} tableStep={tableStep} setTableStep={setTableStep} ll1Step={ll1Step} setLl1Step={setLl1Step} grammar={grammar} />}</div></>}
+          {!grammar || !analysis ? <div className="panel grid min-h-[600px] place-items-center p-10 text-center"><div><AlertTriangle className="mx-auto text-amber-300" size={28} /><h2 className="mt-4 font-display text-xl font-semibold">Grammar needs a small repair</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{parsed.error || "Enter a grammar to begin."}</p></div></div> : <><GrammarDiagnostics analysis={analysis} module={module} /><div className="mt-5">{module === "rdp" ? <RdpWorkspace analysis={analysis} step={rdpStep} setStep={setRdpStep} /> : <Ll1Workspace analysis={analysis} firstStep={firstStep} setFirstStep={setFirstStep} followStep={followStep} setFollowStep={setFollowStep} tableStep={tableStep} setTableStep={setTableStep} ll1Step={ll1Step} setLl1Step={setLl1Step} grammar={analysis.grammar} />}</div></>}
         </div>
       </div>
     </section>

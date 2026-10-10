@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGrammar, buildParseTable, computeFirst, computeFollow, parseGrammar, parseLL1, parseRdp, tokenizeInput } from "./parser";
+import { analyzeGrammar, buildParseTable, computeFirst, computeFollow, eliminateLeftRecursion, parseGrammar, parseLL1, parseRdp, tokenizeInput } from "./parser";
 
 describe("top-down parser edge cases", () => {
   it("accepts epsilon written as a word and treats epsilon input as empty", () => {
@@ -26,13 +26,15 @@ describe("top-down parser edge cases", () => {
     expect(result.events.some((event) => event.kind === "backtrack")).toBe(true);
   });
 
-  it("detects direct and indirect left recursion before recursive descent", () => {
+  it("detects and eliminates direct and indirect left recursion before parsing", () => {
     const direct = parseGrammar("E -> E + T | T\nT -> id");
     const indirect = parseGrammar("A -> B a | c\nB -> A b | d");
     expect(analyzeGrammar(direct).leftRecursion[0].kind).toBe("direct");
     expect(analyzeGrammar(indirect).leftRecursion.some((cycle) => cycle.kind === "indirect")).toBe(true);
-    expect(parseRdp(direct, "id").reason).toMatch(/Left recursion detected/i);
-    expect(parseRdp(indirect, "d a").result).toBe("REJECT");
+    expect(analyzeGrammar(eliminateLeftRecursion(direct)).leftRecursion).toHaveLength(0);
+    expect(analyzeGrammar(eliminateLeftRecursion(indirect)).leftRecursion).toHaveLength(0);
+    expect(parseRdp(direct, "id + id").result).toBe("ACCEPT");
+    expect(parseRdp(indirect, "d a").result).toBe("ACCEPT");
   });
 
   it("reports common-prefix and LL(1) conflicts instead of guessing", () => {
