@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, CircleDot, GitBranch, Info, Layers3, Play, RotateCcw, Table2, Terminal, TreePine, Zap } from "lucide-react";
 import { Link } from "wouter";
 import AppShell from "@/components/AppShell";
-import { buildParseTable, computeFirst, computeFollow, formatSequence, parseGrammar, parseLL1, parseRdp, setToArray, type Grammar, type RdpNode } from "@/lib/parser";
+import { analyzeGrammar, buildParseTable, computeFirst, computeFollow, formatSequence, parseGrammar, parseLL1, parseRdp, setToArray, type Grammar, type RdpNode } from "@/lib/parser";
 
 const LL1_SAMPLE = `E  -> T E'\nE' -> + T E' | ε\nT  -> id`;
 const RDP_SAMPLE = `S -> a A | a B\nA -> b\nB -> c`;
@@ -26,9 +26,10 @@ export default function TopDown() {
     const first = computeFirst(grammar);
     const follow = computeFollow(grammar, first.sets);
     const table = buildParseTable(grammar, first.sets, follow.sets);
+    const diagnostics = analyzeGrammar(grammar);
     const rdp = parseRdp(grammar, inputText);
     const ll1 = parseLL1(grammar, table.table, inputText);
-    return { first, follow, table, rdp, ll1 };
+    return { first, follow, table, diagnostics, rdp, ll1 };
   }, [grammar, inputText]);
 
   const changeGrammar = (value: string) => { setGrammarText(value); setRdpStep(-1); setFirstStep(-1); setFollowStep(-1); setTableStep(-1); setLl1Step(0); setError(""); };
@@ -69,15 +70,27 @@ export default function TopDown() {
             {parsed.error && <div className="mt-3 flex gap-2 rounded-lg border border-red-300/20 bg-red-300/7 p-3 text-xs leading-5 text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{parsed.error}</div>}
             {error && <div className="mt-3 text-xs text-red-300">{error}</div>}
           </div>
-          <div className="panel-soft p-4 text-xs leading-5 text-slate-500"><Info size={15} className="mb-2 text-cyan-300" /><strong className="text-slate-300">Notation</strong><br />Use spaces between terminals. Use <span className="font-mono text-amber-300">ε</span> for an empty production. Add <span className="font-mono text-amber-300">$</span> only if you want it visible in a test string.</div>
+          <div className="panel-soft p-4 text-xs leading-5 text-slate-500"><Info size={15} className="mb-2 text-cyan-300" /><strong className="text-slate-300">Notation</strong><br />Use spaces between terminals. For an empty production, type <span className="font-mono text-amber-300">epsilon</span> (the Unicode symbols <span className="font-mono text-amber-300">ε</span> and <span className="font-mono text-amber-300">ϵ</span> also work). To test the empty string, leave the input blank or type <span className="font-mono text-amber-300">epsilon</span>. Add <span className="font-mono text-amber-300">$</span> only if you want it visible in a test string.</div>
         </aside>
 
         <div className="min-w-0 space-y-5">
-          {!grammar || !analysis ? <div className="panel grid min-h-[600px] place-items-center p-10 text-center"><div><AlertTriangle className="mx-auto text-amber-300" size={28} /><h2 className="mt-4 font-display text-xl font-semibold">Grammar needs a small repair</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{parsed.error || "Enter a grammar to begin."}</p></div></div> : module === "rdp" ? <RdpWorkspace analysis={analysis} step={rdpStep} setStep={setRdpStep} /> : <Ll1Workspace analysis={analysis} firstStep={firstStep} setFirstStep={setFirstStep} followStep={followStep} setFollowStep={setFollowStep} tableStep={tableStep} setTableStep={setTableStep} ll1Step={ll1Step} setLl1Step={setLl1Step} grammar={grammar} />}
+          {!grammar || !analysis ? <div className="panel grid min-h-[600px] place-items-center p-10 text-center"><div><AlertTriangle className="mx-auto text-amber-300" size={28} /><h2 className="mt-4 font-display text-xl font-semibold">Grammar needs a small repair</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{parsed.error || "Enter a grammar to begin."}</p></div></div> : <><GrammarDiagnostics analysis={analysis} module={module} /><div className="mt-5">{module === "rdp" ? <RdpWorkspace analysis={analysis} step={rdpStep} setStep={setRdpStep} /> : <Ll1Workspace analysis={analysis} firstStep={firstStep} setFirstStep={setFirstStep} followStep={followStep} setFollowStep={setFollowStep} tableStep={tableStep} setTableStep={setTableStep} ll1Step={ll1Step} setLl1Step={setLl1Step} grammar={grammar} />}</div></>}
         </div>
       </div>
     </section>
   </AppShell>;
+}
+
+function GrammarDiagnostics({ analysis, module }: { analysis: any; module: Module }) {
+  const { diagnostics, table } = analysis;
+  const hasWarnings = diagnostics.leftRecursion.length || diagnostics.leftFactoring.length || diagnostics.epsilonAlternatives.length || table.conflicts.length;
+  if (!hasWarnings) return <div className="panel-soft flex items-start gap-3 border-emerald-300/20 bg-emerald-300/5 p-4 text-xs leading-5 text-emerald-100"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /><div><strong>Grammar health check passed.</strong> No left-recursion cycle, common-prefix warning, duplicate epsilon alternative, or LL(1) table conflict was detected for this grammar.</div></div>;
+  return <div className="space-y-3">
+    {diagnostics.leftRecursion.map((cycle: any, index: number) => <div key={`lr-${index}`} className="panel border-red-300/25 bg-red-300/8 p-4 text-xs leading-5 text-red-100"><div className="flex items-start gap-3"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><div><strong>Left recursion detected ({cycle.kind}).</strong> <span className="font-mono">{cycle.symbols.join(" → ")}</span><p className="mt-1 text-red-100/75">{module === "rdp" ? "Recursive descent would keep expanding before consuming input, so the run is stopped safely." : "A predictive LL(1) parser can loop or build an invalid table for this shape."} Rewrite A → A α | β as A → β A' and A' → α A' | epsilon, or use a bottom-up/Pratt parser when the grammar is intentionally left-recursive.</p></div></div></div>)}
+    {diagnostics.leftFactoring.map((item: any) => <div key={`lf-${item.lhs}-${item.prefix}`} className="panel border-amber-300/25 bg-amber-300/8 p-4 text-xs leading-5 text-amber-100"><strong>Common prefix detected in {item.lhs}.</strong> Productions {item.alternatives.join(" and ")} begin with <span className="font-mono">{item.prefix}</span>. Left-factor them so one lookahead token can choose the rule.</div>)}
+    {diagnostics.epsilonAlternatives.map((item: any) => <div key={`eps-${item.lhs}`} className="panel border-violet-300/25 bg-violet-300/8 p-4 text-xs leading-5 text-violet-100"><strong>Multiple epsilon alternatives in {item.lhs}.</strong> {item.productionIds.join(", ")} all derive the empty string. Consolidate them before relying on FOLLOW-based table placement.</div>)}
+    {table.conflicts.length > 0 && <div className="panel border-red-300/25 bg-red-300/8 p-4 text-xs leading-5 text-red-100"><strong>{table.conflicts.length} LL(1) table conflict{table.conflicts.length > 1 ? "s" : ""}.</strong> More than one production wants the same lookahead cell. This can come from ambiguity, missing left factoring, or an epsilon/FOLLOW overlap; the table marks the cell and the trace rejects it instead of guessing.</div>}
+  </div>;
 }
 
 function ModuleButton({ active, onClick, icon, title, caption }: { active: boolean; onClick: () => void; icon: React.ReactNode; title: string; caption: string }) { return <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${active ? "border-cyan-300/40 bg-cyan-300/10" : "border-transparent bg-white/[.02] hover:border-white/10 hover:bg-white/[.04]"}`}><span className={`grid h-9 w-9 place-items-center rounded-lg ${active ? "bg-cyan-300 text-[#061014]" : "bg-white/5 text-slate-500"}`}>{icon}</span><span className="min-w-0"><span className={`block font-display text-sm font-semibold ${active ? "text-cyan-100" : "text-slate-300"}`}>{title}</span><span className="mt-0.5 block font-mono text-[10px] text-slate-600">{caption}</span></span>{active && <CircleDot size={14} className="ml-auto text-cyan-300" />}</button>; }

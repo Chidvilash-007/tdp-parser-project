@@ -12,6 +12,18 @@ export type Grammar = {
   productions: Production[];
 };
 
+export type LeftRecursionCycle = {
+  symbols: string[];
+  kind: "direct" | "indirect";
+};
+
+export type GrammarAnalysis = {
+  nullable: string[];
+  leftRecursion: LeftRecursionCycle[];
+  leftFactoring: { lhs: string; prefix: string; alternatives: string[] }[];
+  epsilonAlternatives: { lhs: string; productionIds: string[] }[];
+};
+
 export type RdpNode = {
   id: number;
   symbol: string;
@@ -66,13 +78,19 @@ export type Ll1TraceStep = {
   type: "expand" | "match" | "error" | "accept" | "start";
 };
 
+const EPSILON_ALIASES = /^(ε|ϵ|epsilon|eps)$/i;
+
 export function normalizeSymbol(symbol: string) {
   return symbol.trim().replace(/^['"]|['"]$/g, "");
 }
 
+export function isEpsilonSymbol(value: string) {
+  return EPSILON_ALIASES.test(value.trim());
+}
+
 export function tokenizeInput(value: string) {
   const trimmed = value.trim();
-  if (!trimmed) return [];
+  if (!trimmed || isEpsilonSymbol(trimmed)) return [];
   return trimmed.split(/\s+/).map(normalizeSymbol).filter(Boolean);
 }
 
@@ -86,20 +104,20 @@ export function parseGrammar(text: string): Grammar {
 
   for (const line of lines) {
     const match = line.match(/^(.+?)\s*(?:->|::=)\s*(.+)$/);
-    if (!match) throw new Error(`Could not read “${line}”. Use: E -> T E' | ε`);
+    if (!match) throw new Error(`Could not read “${line}”. Use: E -> T E' | epsilon`);
     const lhs = normalizeSymbol(match[1]);
     if (!lhs) throw new Error("Every rule needs a non-terminal on the left.");
     if (!lhsOrder.includes(lhs)) lhsOrder.push(lhs);
     const alternatives = match[2].split("|");
     alternatives.forEach((alternative) => {
       const cleaned = alternative.trim();
-      const epsilon = !cleaned || /^(ε|ϵ|epsilon|eps)$/i.test(cleaned);
+      const epsilon = !cleaned || isEpsilonSymbol(cleaned);
       const rhs = epsilon ? [] : cleaned.split(/\s+/).map(normalizeSymbol).filter(Boolean);
       productions.push({
         id: `P${++productionIndex}`,
         lhs,
         rhs,
-        raw: `${lhs} → ${rhs.length ? rhs.join(" ") : "ε"}`,
+        raw: `${lhs} → ${rhs.length ? rhs.join(" ") : "epsilon"}`,
       });
     });
   }
@@ -115,7 +133,7 @@ export function parseGrammar(text: string): Grammar {
 }
 
 export function formatSequence(sequence: string[]) {
-  return sequence.length ? sequence.join(" ") : "ε";
+  return sequence.length ? sequence.join(" ") : "epsilon";
 }
 
 function firstOfSequence(sequence: string[], grammar: Grammar, first: Record<string, Set<string>>) {
@@ -142,6 +160,80 @@ function firstOfSequence(sequence: string[], grammar: Grammar, first: Record<str
   return result;
 }
 
+function computeNullable(grammar: Grammar) {
+  const nullable = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    grammar.productions.forEach((production) => {
+      if (production.rhs.length === 0 || production.rhs.every((symbol) => grammar.nonTerminals.includes(symbol) && nullable.has(symbol))) {
+        if (!nullable.has(production.lhs)) {
+          nullable.add(production.lhs);
+          changed = true;
+        }
+      }
+    });
+  }
+  return nullable;
+}
+
+export function analyzeGrammar(grammar: Grammar): GrammarAnalysis {
+  const nullable = computeNullable(grammar);
+  const edges: Record<string, Set<string>> = Object.fromEntries(grammar.nonTerminals.map((symbol) => [symbol, new Set<string>()]));
+  grammar.productions.forEach((production) => {
+    for (const symbol of production.rhs) {
+      if (!grammar.nonTerminals.includes(symbol)) break;
+      edges[production.lhs].add(symbol);
+      if (!nullable.has(symbol)) break;
+    }
+  });
+
+  const leftRecursion: LeftRecursionCycle[] = [];
+  const seenCycles = new Set<string>();
+  grammar.nonTerminals.forEach((start) => {
+    const visit = (current: string, path: string[]) => {
+      for (const next of edges[current] ?? []) {
+        if (next === start) {
+          const cycle = [...path, start];
+          const key = cycle.join("→");
+          if (!seenCycles.has(key)) {
+            seenCycles.add(key);
+            leftRecursion.push({ symbols: cycle, kind: cycle.length === 2 ? "direct" : "indirect" });
+          }
+        } else if (!path.includes(next) && path.length < grammar.nonTerminals.length + 1) {
+          visit(next, [...path, next]);
+        }
+      }
+    };
+    visit(start, [start]);
+  });
+
+  const leftFactoring: GrammarAnalysis["leftFactoring"] = [];
+  grammar.nonTerminals.forEach((lhs) => {
+    const alternatives = grammar.productions.filter((production) => production.lhs === lhs && production.rhs.length > 0);
+    alternatives.forEach((production, index) => {
+      alternatives.slice(index + 1).forEach((other) => {
+        let common = 0;
+        while (common < production.rhs.length && common < other.rhs.length && production.rhs[common] === other.rhs[common]) common += 1;
+        if (common > 0) {
+          const prefix = production.rhs.slice(0, common).join(" ");
+          const key = `${lhs}|${prefix}`;
+          if (!leftFactoring.some((item) => `${item.lhs}|${item.prefix}` === key)) {
+            leftFactoring.push({ lhs, prefix, alternatives: [production.id, other.id] });
+          }
+        }
+      });
+    });
+  });
+
+  const epsilonAlternatives = grammar.nonTerminals.flatMap((lhs) => {
+    const ids = grammar.productions.filter((production) => production.lhs === lhs && production.rhs.length === 0).map((production) => production.id);
+    return ids.length > 1 ? [{ lhs, productionIds: ids }] : [];
+  });
+
+  return { nullable: [...nullable], leftRecursion, leftFactoring, epsilonAlternatives };
+}
+
 export function computeFirst(grammar: Grammar) {
   const sets: Record<string, Set<string>> = {};
   grammar.nonTerminals.forEach((symbol) => (sets[symbol] = new Set<string>()));
@@ -149,7 +241,7 @@ export function computeFirst(grammar: Grammar) {
   let changed = true;
   let guard = 0;
 
-  while (changed && guard++ < 100) {
+  while (changed && guard++ < 1000) {
     changed = false;
     grammar.productions.forEach((production) => {
       const before = new Set(sets[production.lhs]);
@@ -158,9 +250,9 @@ export function computeFirst(grammar: Grammar) {
       const additions = [...sets[production.lhs]].filter((value) => !before.has(value));
       if (additions.length) {
         changed = true;
-        const source = production.rhs.length ? formatSequence(production.rhs) : "ε";
+        const source = production.rhs.length ? formatSequence(production.rhs) : "epsilon";
         const reason = additions.includes("ε")
-          ? `${production.lhs} can derive ε through ${source}.`
+          ? `${production.lhs} can derive epsilon through ${source}.`
           : `From FIRST(${source}), add ${additions.join(", ")} to FIRST(${production.lhs}).`;
         steps.push({ id: steps.length + 1, target: production.lhs, sequence: source, additions, reason });
       }
@@ -183,7 +275,7 @@ export function computeFollow(grammar: Grammar, first: Record<string, Set<string
   let changed = true;
   let guard = 0;
 
-  while (changed && guard++ < 100) {
+  while (changed && guard++ < 1000) {
     changed = false;
     grammar.productions.forEach((production) => {
       production.rhs.forEach((symbol, index) => {
@@ -198,10 +290,10 @@ export function computeFollow(grammar: Grammar, first: Record<string, Set<string
         const additions = [...sets[symbol]].filter((value) => !before.has(value));
         if (additions.length) {
           changed = true;
-          const source = suffix.length ? formatSequence(suffix) : "ε";
+          const source = suffix.length ? formatSequence(suffix) : "epsilon";
           const reason = derived.has("ε") || !suffix.length
             ? `Because ${symbol} is at the end (or the suffix is nullable), inherit FOLLOW(${production.lhs}).`
-            : `Add FIRST(${source}) without ε to FOLLOW(${symbol}).`;
+            : `Add FIRST(${source}) without epsilon to FOLLOW(${symbol}).`;
           steps.push({ id: steps.length + 1, target: symbol, source: production.lhs, additions, reason });
         }
       });
@@ -233,22 +325,12 @@ export function buildParseTable(
     const derived = firstOfProduction(production, grammar, first);
     derived.forEach((lookahead) => {
       if (lookahead !== "ε") {
-        addPlacement(
-          production,
-          lookahead,
-          "FIRST",
-          `ε is not needed: ${lookahead} is in FIRST(${formatSequence(production.rhs)}).`,
-        );
+        addPlacement(production, lookahead, "FIRST", `${lookahead} is in FIRST(${formatSequence(production.rhs)}).`);
       }
     });
     if (derived.has("ε")) {
       follow[production.lhs]?.forEach((lookahead) => {
-        addPlacement(
-          production,
-          lookahead,
-          "FOLLOW",
-          `The rule derives ε, so place it for every symbol in FOLLOW(${production.lhs}).`,
-        );
+        addPlacement(production, lookahead, "FOLLOW", `The rule derives epsilon, so place it for every symbol in FOLLOW(${production.lhs}).`);
       });
     }
   });
@@ -266,7 +348,7 @@ export function parseLL1(grammar: Grammar, table: Record<string, Production[]>, 
   let reason = "";
   let guard = 0;
 
-  while (stack.length && guard++ < 200) {
+  while (stack.length && guard++ < 1000) {
     const top = stack[stack.length - 1];
     const current = input[inputIndex] ?? "$";
     if (top === "$" && current === "$") {
@@ -308,7 +390,7 @@ export function parseLL1(grammar: Grammar, table: Record<string, Production[]>, 
     [...production.rhs].reverse().forEach((symbol) => stack.push(symbol));
     steps.push({ id: steps.length + 1, stack: stack.slice().reverse().join(" ") || "∅", input: input.slice(inputIndex).join(" "), action: `${top} → ${formatSequence(production.rhs)}`, type: "expand" });
   }
-  if (guard >= 200) reason = "Stopped after 200 moves to prevent an infinite grammar loop.";
+  if (guard >= 1000) reason = "Stopped after 1000 moves to prevent an infinite grammar loop.";
   return { steps, result, reason };
 }
 
@@ -326,14 +408,17 @@ export function parseRdp(grammar: Grammar, inputText: string) {
     events.push({ index: events.length + 1, kind, message, stack: [...stack], input: [...input], inputIndex, production, tree: cloneTree() });
   };
 
+  const grammarAnalysis = analyzeGrammar(grammar);
+  if (grammarAnalysis.leftRecursion.length) {
+    const cycle = grammarAnalysis.leftRecursion[0].symbols.join(" → ");
+    emit("reject", `LEFT RECURSION detected: ${cycle}. Rewrite it before using recursive descent, for example A → A α | β becomes A → β A' and A' → α A' | epsilon.`);
+    return { events, result: "REJECT" as const, reason: `Left recursion detected (${cycle}). Rewrite the grammar using a new helper non-terminal before parsing.` };
+  }
+
   const parseNonTerminal = (name: string, parent: RdpNode | null, depth: number): boolean => {
-    if (stopped || depth > 35 || events.length > 500) {
+    if (stopped || depth > 60 || events.length > 2000) {
       stopped = true;
-      emit("reject", "Stopped: grammar expansion exceeded the safety limit.");
-      return false;
-    }
-    if (stack.includes(name)) {
-      emit("fail", `Left recursion detected at ${name}; recursive descent cannot expand this call safely.`);
+      emit("reject", "Stopped: grammar expansion exceeded the safety limit. Check for deep nesting or an unproductive grammar.");
       return false;
     }
     const node: RdpNode = { id: ++nodeId, symbol: name, kind: "nonterminal", status: "active", children: [] };
@@ -344,6 +429,7 @@ export function parseRdp(grammar: Grammar, inputText: string) {
     for (let choiceIndex = 0; choiceIndex < choices.length; choiceIndex += 1) {
       const production = choices[choiceIndex];
       const savedInput = inputIndex;
+      const savedChildren = node.children.length;
       node.production = production.id;
       emit("try", `Try ${production.id}: ${production.raw}`, production);
       let success = true;
@@ -374,6 +460,7 @@ export function parseRdp(grammar: Grammar, inputText: string) {
         return true;
       }
       inputIndex = savedInput;
+      node.children = node.children.slice(0, savedChildren);
       node.status = choiceIndex < choices.length - 1 ? "backtrack" : "failed";
       if (choiceIndex < choices.length - 1) {
         emit("backtrack", `Backtrack in ${name}: restore input and try the next alternative.`);
