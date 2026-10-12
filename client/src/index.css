@@ -162,3 +162,17 @@ button { cursor: pointer; }
 
 pre { color: #334155; }
 code { color: #2457a6; }
+
+/* Contrast fixes for parser-specific semantic states. */
+.text-red-100, .text-red-200, .text-red-300 { color: #a52d3b !important; }
+.text-red-100\/75, .text-red-100\/80 { color: #8f3843 !important; }
+.text-amber-100, .text-amber-200, .text-amber-300 { color: #93600f !important; }
+.text-amber-200\/70, .text-amber-300\/70 { color: #93600f !important; }
+.text-emerald-100, .text-emerald-200, .text-emerald-300 { color: #23754c !important; }
+.text-emerald-200\/80, .text-emerald-300\/70 { color: #23754c !important; }
+.text-violet-100, .text-violet-200, .text-violet-300 { color: #684c9b !important; }
+.bg-\[\#071018\]\/60, .bg-\[\#071018\]\/55 { background-color: #f8fafc !important; }
+.border-red-300\/20, .border-red-300\/25 { border-color: #efc5ca !important; }
+.border-amber-300\/25 { border-color: #edd8ad !important; }
+.border-violet-300\/25 { border-color: #d9cceb !important; }
+.border-white\/5 { border-color: #e4e9f0 !important; }
