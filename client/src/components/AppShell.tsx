@@ -5,14 +5,14 @@ export default function AppShell({ children, eyebrow = "TOP-DOWN PARSING / WORKB
   const [location] = useLocation();
   return (
     <div className="app-shell">
-      <header className="relative z-20 border-b border-white/10 bg-[#071018]/80 backdrop-blur-xl">
+      <header className="relative z-20 border-b border-slate-200 bg-white/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1480px] items-center justify-between px-5 py-4 lg:px-8">
           <Link href="/" className="flex items-center gap-3 no-underline">
-            <div className="grid h-9 w-9 place-items-center rounded-xl border border-cyan-200/30 bg-cyan-300/10 text-cyan-200 shadow-[0_0_26px_rgba(108,229,232,.12)]">
+            <div className="grid h-9 w-9 place-items-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700 shadow-sm">
               <Code2 size={18} strokeWidth={2.5} />
             </div>
             <div>
-              <div className="font-display text-sm font-bold tracking-tight text-slate-100">parser<span className="text-cyan-300">.lab</span></div>
+              <div className="font-display text-sm font-bold tracking-tight text-slate-900">parser<span className="text-blue-700">.lab</span></div>
               <div className="font-mono text-[9px] uppercase tracking-[.18em] text-slate-500">visual compiler tools</div>
             </div>
           </Link>
@@ -22,7 +22,7 @@ export default function AppShell({ children, eyebrow = "TOP-DOWN PARSING / WORKB
             <NavItem href="/guide" icon={<BookOpen size={14} />} label="User guide" active={location === "/guide"} />
           </div>
           <div className="flex items-center gap-2">
-            <span className="hidden rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 font-mono text-[10px] font-semibold text-emerald-300 sm:inline-flex">LOCAL / READY</span>
+            <span className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-mono text-[10px] font-semibold text-emerald-700 sm:inline-flex">LOCAL / READY</span>
             <Link href="/top-down" className="btn-secondary px-3 py-2 text-xs">Open lab <ChevronRight size={14} /></Link>
           </div>
         </div>
